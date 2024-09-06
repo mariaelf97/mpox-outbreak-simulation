@@ -1,0 +1,18 @@
+ISOLATES = [i for i in open("/home/mahmadi/mpox_seqs/isolates_B1.txt").read().split('\n') if len(i) > 0]
+output_path = "/home/mahmadi/mpox_seqs/simulations/pure_samples/"
+primer_path = "/home/mahmadi/mpox_seqs/primer.bed"
+
+rule all:
+    input:
+        expand(output_path + "{isolate}", isolate=ISOLATES),
+
+rule mixamp:
+    input:
+        genome="/home/mahmadi/mpox_seqs/sequences/{isolate}.fasta",  # can be either genome index or genome fasta
+        primer=primer_path,
+    output:
+        directory(output_path + "{isolate}")
+    conda:
+        "mixamp"
+    shell:
+        """mixamp simulate-proportions {input.genome} {input.primer} --outdir {output} --read_length 100 --outerdistance 50"""

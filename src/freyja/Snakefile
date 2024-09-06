@@ -1,0 +1,115 @@
+ISOLATES = [i for i in open("/home/mahmadi/mpox_seqs/isolates_B1.txt").read().split('\n') if len(i) > 0]
+output_path = "/home/mahmadi/mpox_seqs/simulations/pure_samples/"
+reference_path = "/home/mahmadi/mpox_seqs/reference.fasta"
+primer_path = "/home/mahmadi/mpox_seqs/primer.bed"
+barcodes_path = "/home/mahmadi/mpox_seqs/minimal_barcodes.csv"
+
+rule all:
+    input:
+        expand(output_path + "{isolate}/{isolate}.sam", isolate=ISOLATES),
+        expand(output_path + "{isolate}/{isolate}.bam", isolate=ISOLATES),
+        expand(output_path + "{isolate}/{isolate}_sorted.bam", isolate=ISOLATES),
+        expand(output_path + "{isolate}/{isolate}_sorted.bam.bai", isolate=ISOLATES),
+        expand(output_path + "{isolate}/trimmed_{isolate}.bam", isolate=ISOLATES),
+        expand(output_path + "{isolate}/{isolate}.vcf", isolate=ISOLATES),
+        expand(output_path + "{isolate}/depths.tsv", isolate=ISOLATES),
+        expand(output_path + "{isolate}/{isolate}_freyja_demix.txt", isolate=ISOLATES)
+
+
+rule minimap2_sam:
+    input:
+        target=reference_path,  # can be either genome index or genome fasta
+        query=output_path + "{isolate}/reads.fastq",
+    output:
+        output_path + "{isolate}/{isolate}.sam"
+    conda:
+        "minimap"
+    shell:
+        """minimap2 -ax sr {input.target} {input.query} > {output} """
+
+rule sam2bam:
+    input:
+        output_path + "{isolate}/{isolate}.sam"
+    output:
+        output_path + "{isolate}/{isolate}.bam"
+    conda:
+        "freyja"
+    shell:
+        """samtools view -bS {input} > {output} """
+
+rule sort_bam:
+    input:
+        output_path + "{isolate}/{isolate}.bam"
+    output:
+        output_path + "{isolate}/{isolate}_sorted.bam"
+    conda:
+        "freyja"
+    shell:
+        """samtools sort -o {output} {input} """
+
+rule index_bam:
+    input:
+        output_path + "{isolate}/{isolate}_sorted.bam"
+    output:
+        output_path + "{isolate}/{isolate}_sorted.bam.bai"
+    conda:
+        "freyja"
+    shell:
+        """samtools index {input} """
+
+rule remove_adapters:
+    input:
+        bam_file=output_path + "{isolate}/{isolate}_sorted.bam",
+        primer=primer_path
+    output:
+        output_path + "{isolate}/trimmed_{isolate}.bam"
+    conda:
+        "freyja"
+    params:
+        pfx=output_path + "{isolate}/trimmed_{isolate}"
+    shell:
+        """ivar trim -b {input.primer} -p {params.pfx} -i {input.bam_file} -q 15 -m 50 -s 4 -e"""
+
+rule sort_index:
+    input:
+        output_path + "{isolate}/trimmed_{isolate}.bam"
+    output:
+        output_path + "{isolate}/trimmed_{isolate}_sorted.bam"
+    conda:
+        "freyja"
+    shell:
+        """samtools sort -o {output} {input} && samtools index {output} """
+
+rule generate_depth:
+    input:
+        bam_file=output_path + "{isolate}/trimmed_{isolate}_sorted.bam",
+        reference=reference_path
+    output:
+        depths=output_path + "{isolate}/depths.tsv"
+    conda:
+        "freyja"
+    shell:
+        """samtools mpileup -aa -A -d 600000 -Q 20 -q 0 -B -f {input.reference} {input.bam_file} | cut -f1-4 > {output}"""
+
+rule run_lofreq:
+    input:
+        bam_file=output_path + "{isolate}/trimmed_{isolate}_sorted.bam",
+        reference=reference_path
+    output:
+        output_path + "{isolate}/{isolate}.vcf"
+    conda:
+        "lofreq"
+    shell:
+        """lofreq call -f {input.reference} -a 1 -b 1 -o {output} {input.bam_file}"""
+
+rule run_demix:
+    input:
+        variants=output_path + "{isolate}/{isolate}.vcf",
+        depths=output_path + "{isolate}/depths.tsv",
+        barcodes=barcodes_path
+    output:
+        output_path + "{isolate}/{isolate}_freyja_demix.txt"
+    conda:
+        "freyja"
+    shell:
+        """freyja demix {input.variants} {input.depths} --output {output} --barcodes {input.barcodes}"""
